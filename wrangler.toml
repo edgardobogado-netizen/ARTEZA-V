@@ -1,0 +1,26 @@
+name = "arteza-v"
+main = "src/index.js"
+type = "javascript"
+account_id = ""  # Tu account ID de Cloudflare
+workers_dev = true
+
+# Vinculación a Cloudflare Pages
+[env.production]
+routes = [
+  { pattern = "consorcioartezav.com", zone_name = "consorcioartezav.com" }
+]
+
+# Bindings (variables de entorno)
+[env.production.vars]
+ENVIRONMENT = "production"
+
+# Si usas Supabase como backend
+[env.production.vars]
+SUPABASE_URL = "https://tu-proyecto.supabase.co"
+SUPABASE_ANON_KEY = "tu-anon-key"
+
+# KV Storage (si necesitas caché)
+[[kv_namespaces]]
+binding = "CACHE"
+id = ""
+preview_id = ""
