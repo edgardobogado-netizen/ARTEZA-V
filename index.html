@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full bg-slate-50">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>ConsorcioAdmin - ARTEZA V</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {50: '#eef2ff',100: '#e0e7ff',500: '#6366f1',600: '#4f46e5',700: '#4338ca',900: '#312e81'}
+          },
+          fontFamily: { sans: ['Inter','sans-serif'] }
+        }
+      }
+    }
+  </script>
+
+  <!-- Fuentes e Iconos -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+  <!-- React / ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Supabase -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase-config.js"></script>
+
+  <!-- PDF libs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+  <script>
+    window.pdfjsLib = window['pdfjs-dist/build/pdf'];
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+  </script>
+
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+    .dark .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; }
+    @keyframes fadeIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+    @media print { .no-print { display: none !important; } .print-only { display: block !important; } }
+  </style>
+</head>
+
+<body class="h-full text-slate-800 dark:text-slate-100 dark:bg-slate-900 transition-colors duration-200 selection:bg-indigo-500 selection:text-white">
+  <div id="root" class="h-full flex flex-col"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // INIT Supabase client (requires supabase-config.js with SUPABASE_URL and SUPABASE_ANON_KEY)
+    function createSupabaseClient() {
+      if (window.artezaSupabase) return window.artezaSupabase;
+      if (window.supabase && window.SUPABASE_URL && window.SUPABASE_ANON_KEY && !String(window.SUPABASE_URL).includes("TU-PROYECTO")) {
+        const client = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+        window.artezaSupabase = client;
+        return client;
+      }
+      return null;
+    }
+
+    // Small PDF viewer that renders pages into canvases (uses pdf.js)
+    const PdfCanvasViewer = ({ base64Data }) => {
+      const [pdf, setPdf] = useState(null);
+      const [pages, setPages] = useState(0);
+      const containerRef = useRef(null);
+
+      useEffect(() => {
+        if (!base64Data) return;
+        const initPdf = async () => {
+          try {
+            const base64 = base64Data.includes(',') ? base64Data.split(',')[1] : base64Data;
+            const binaryString = atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+            const loadingTask = window.pdfjsLib.getDocument({ data: bytes });
+            const loadedPdf = await loadingTask.promise;
+            setPdf(loadedPdf);
+            setPages(loadedPdf.numPages);
+          } catch (error) { console.error("Error al renderizar PDF:", error); }
+        };
+        initPdf();
+      }, [base64Data]);
+
+      useEffect(() => {
+        if (!pdf || !containerRef.current) return;
+        const renderPages = async () => {
+          containerRef.current.innerHTML = '';
+          for (let i = 1; i <= pages; i++) {
+            const page = await pdf.getPage(i);
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+            canvas.className = 'mb-6 shadow-2xl mx-auto max-w-full rounded-lg bg-white border border-slate-300';
+            containerRef.current.appendChild(canvas);
+            await page.render({ canvasContext: context, viewport }).promise;
+          }
+        };
+        renderPages();
+      }, [pdf, pages]);
+
+      if (!pdf) return (
+        <div className="flex flex-col items-center justify-center h-full text-slate-400">
+          <i className="fa-solid fa-spinner fa-spin text-5xl mb-4 text-indigo-500"></i>
+          <p className="font-bold animate-pulse">Desencriptando documento de forma segura...</p>
+        </div>
+      );
+
+      return <div className="flex-1 overflow-y-auto bg-slate-200 dark:bg-slate-800 p-6 custom-scrollbar text-center" ref={containerRef}></div>;
+    };
+
+    function App() {
+      // Supabase client
+      const supabase = createSupabaseClient();
+
+      // Auth + App state
+      const [isLoggedIn, setIsLoggedIn] = useState(false);
+      const [loginInput, setLoginInput] = useState({ email: '', password: '' });
+      const [currentUser, setCurrentUser] = useState(null); // { id, name, email, unit, avatar }
+      const [currentUserRole, setCurrentUserRole] = useState('Propietario');
+      const [currentTab, setCurrentTab] = useState('comunicados');
+      const [darkMode, setDarkMode] = useState(false);
+      const [sidebarOpen, setSidebarOpen] = useState(false);
+
+      // Data lists
+      const [comunicados, setComunicados] = useState([]);
+      const [profiles, setProfiles] = useState([]);
+      const [unitExpensas, setUnitExpensas] = useState([]);
+      const [expensas, setExpensas] = useState([]);
+      const [reclamos, setReclamos] = useState([]);
+      const [galeria, setGaleria] = useState([]);
+      const [expensePdfs, setExpensePdfs] = useState([]);
+      const [libreDeudaList, setLibreDeudaList] = useState([]);
+
+      // UI state
+      const [toastMessage, setToastMessage] = useState(null);
+      const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, message: '', onConfirm: null });
+
+      // modals & forms (kept similar structure to your original app)
+      const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+      const [newComunicadoForm, setNewComunicadoForm] = useState({ title: '', category: 'General', priority: 'Normal', target: 'Todas las Unidades', content: '', attachmentName: '', attachmentPath: '' });
+
+      const [isPdfUploadModalOpen, setIsPdfUploadModalOpen] = useState(false);
+      const [pdfForm, setPdfForm] = useState({ period: 'Agosto 2026', fileName: '', fileFile: null });
+
+      const [viewingPdfModal, setViewingPdfModal] = useState(null); // { fileName, storage_path OR base64 }
+
+      // Helpers
+      const showToast = (text, type='success') => { setToastMessage({ text, type }); setTimeout(() => setToastMessage(null), 3500); };
+
+      const confirmAction = (message, action) => { setConfirmDialog({ isOpen: true, message, onConfirm: action }); };
+      const closeConfirm = () => setConfirmDialog({ isOpen: false, message: '', onConfirm: null);
+
+      // ---------- AUTH / SESSIONS ----------
+      useEffect(() => {
+        if (!supabase) return;
+        // listen for auth changes
+        const {
+          data: { subscription }
+        } = supabase.auth.onAuthStateChange((event, session) => {
+          if (session && session.user) {
+            loadProfile(session.user.id);
+          } else {
+            setIsLoggedIn(false);
+            setCurrentUser(null);
+            setCurrentUserRole('Propietario');
+          }
+        });
+
+        // Try restoring session on load
+        (async () => {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session && session.user) {
+            loadProfile(session.user.id);
+          }
+        })();
+
+        return () => { subscription?.unsubscribe(); };
+      }, [supabase]);
+
+      const loadProfile = async (userId) => {
+        if (!supabase) return;
+        const { data: profile, error } = await supabase.from('profiles').select('*').eq('id', userId).single().maybeSingle();
+        if (error && error.code !== 'PGRST116') {
+          // PGRST116 sometimes when single returns nothing — ignore
+          console.error('profile load error', error);
+        }
+        if (profile) {
+          setCurrentUserRole(profile.role || 'Propietario');
+          setCurrentUser({ id: profile.id, name: profile.name, email: profile.email, unit: profile.unit || '', avatar: profile.avatar || '' });
+          setIsLoggedIn(true);
+          showToast(`Bienvenido, ${profile.name}`);
+          // fetch data after login
+          fetchAllData(profile);
+        } else {
+          // No profile row: fetch auth user and create minimal profile if possible
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user) {
+            // create a minimal profile row (RLS permite insert self per schema)
+            await supabase.from('profiles').insert([{ id: user.id, email: user.email, name: user.user_metadata?.full_name || user.email }]).select();
+            // reload
+            loadProfile(user.id);
+          }
+        }
+      };
+
+      const handleLoginSubmit = async (e) => {
+        e.preventDefault();
+        if (!supabase) { showToast('Configure supabase-config.js primero', 'error'); return; }
+        const { data, error } = await supabase.auth.signInWithPassword({ email: loginInput.email, password: loginInput.password });
+        if (error) { showToast('Correo o contraseña incorrectos', 'error'); return; }
+        if (data && data.user) {
+          loadProfile(data.user.id);
+        }
+      };
+
+      const handleLogout = async () => {
+        if (!supabase) return;
+        await supabase.auth.signOut();
+        setIsLoggedIn(false);
+        setCurrentUser(null);
+        setCurrentUserRole('Propietario');
+        showToast('Sesión cerrada');
+      };
+
+      // ---------- FETCH DATA ----------
+      const fetchAllData = async (profile) => {
+        // fetch tables depending on role
+        await Promise.all([
+          fetchComunicados(),
+          fetchProfiles(),
+          fetchUnitExpensas(profile),
+          fetchExpensas(),
+          fetchReclamos(),
+          fetchGaleria(),
+          fetchExpensePdfs(),
+          fetchLibreDeuda()
+        ]);
+      };
+
+      const fetchComunicados = async () => {
+        if (!supabase) return;
+        const { data, error } = await supabase.from('comunicados').select('*').order('date', { ascending: false });
+        if (!error) setComunicados(data || []);
+      };
+
+      const fetchProfiles = async () => {
+        if (!supabase) return;
+        const { data, error } = await supabase.from('profiles').select('*').order('created_at', { ascending: false });
+        if (!error) setProfiles(data || []);
+      };
+
+      const fetchUnitExpensas = async (profile = currentUser) => {
+        if (!supabase) return;
+        // Admin sees all; owner sees their unit
+        let query = supabase.from('unit_expensas').select('*').order('created_at', { ascending: false });
+        const { data, error } = await query;
+        if (!error) setUnitExpensas(data || []);
+      };
+
+      const fetchExpensas = async () => {
+        if (!supabase) return;
+        const { data, error } = await supabase.from('expensas').select('*').order('created_at', { ascending: false });
+        if (!error) setExpensas(data || []);
+      };
+
+      const fetchReclamos = async () => {
+        if (!supabase) return;
+        const { data, error } = await supabase.from('reclamos').select('*').order('date', { ascending: false });
+        if (!error) setReclamos(data || []);
+      };
+
+      const fetchGaleria = async () => {
+        if (!supabase) return;
+        const { data, error } = await supabase.from('galeria').select('*').order('date', { ascending: false });
+        if (!error) setGaleria(data || []);
+      };
+
+      const fetchExpensePdfs = async () => {
+        if (!supabase) return;
+        const { data, error } = await supabase.from('expense_pdfs').select('*').order('upload_date', { ascending: false });
+        if (!error) setExpensePdfs(data || []);
+      };
+
+      const fetchLibreDeuda = async () => {
+        if (!supabase) return;
+        const { data, error } = await supabase.from('libre_deuda').select('*').order('created_at', { ascending: false });
+        if (!error) setLibreDeudaList(data || []);
+      };
+
+      // ---------- STORAGE: upload helpers ----------
+      // Upload a file to storage and return storage_path
+      const uploadToStorage = async (bucket, path, file, progressCb) => {
+        if (!supabase) throw new Error('Supabase no configurado');
+        // Remove leading slash if any
+        const normalizedPath = path.replace(/^\/+/, '');
+        const { data, error } = await supabase.storage.from(bucket).upload(normalizedPath, file, { upsert: true, cacheControl: '3600' }); // upsert true to replace same name
+        if (error) throw error;
+        return data.path;
+      };
+
+      // Create signed URL for a storage path
+      const createSignedUrl = async (bucket, storagePath, expires = 60) => {
+        if (!supabase) throw new Error('Supabase no configurado');
+        const { data, error } = await supabase.storage.from(bucket).createSignedUrl(storagePath, expires);
+        if (error) throw error;
+        return data.signedUrl;
+      };
+
+      // VIEW / DOWNLOAD PDF (handles both dataURI and storage_path signed URL)
+      const handleViewPdf = async (fileName, fileRef) => {
+        if (!fileRef) { showToast('Documento no disponible', 'error'); return; }
+        // If fileRef looks like storage_path (no data: prefix), treat as storage path
+        if (!fileRef.startsWith('data:')) {
+          try {
+            const signed = await createSignedUrl('arteza', fileRef, 60);
+            // Open in modal viewer as direct URL
+            setViewingPdfModal({ fileName, url: signed, storage_path: fileRef });
+            return;
+          } catch (e) {
+            console.error(e);
+            showToast('Error al generar URL segura', 'error');
+            return;
+          }
+        } else {
+          // data URI -> pass as-is to viewer
+          setViewingPdfModal({ fileName, base64: fileRef });
+        }
+      };
+
+      const handleDownloadExpensePdf = async (pdfItem) => {
+        if (!pdfItem) return;
+        showToast('Preparando descarga segura...', 'info');
+        try {
+          // If file stored in storage_path, create signed url and download
+          if (pdfItem.storage_path) {
+            const signed = await createSignedUrl('arteza', pdfItem.storage_path, 120);
+            const a = document.createElement('a');
+            a.href = signed;
+            a.download = pdfItem.file_name || 'documento.pdf';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            showToast('Descarga iniciada');
+            return;
+          }
+          // else if fileUrl (legacy dataURI)
+          if (pdfItem.file_url && pdfItem.file_url.startsWith('data:')) {
+            const base64 = pdfItem.file_url.split(',')[1];
+            const bytes = atob(base64);
+            const buf = new Uint8Array(bytes.length);
+            for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
+            const blob = new Blob([buf], { type: 'application/pdf' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = pdfItem.file_name || 'documento.pdf';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showToast('Descarga iniciada');
+            return;
+          }
+          showToast('Formato de archivo no soportado', 'error');
+        } catch (e) {
+          console.error(e);
+          showToast('Error al descargar', 'error');
+        }
+      };
+
+      // ---------- CRUD OPERATIONS (examples) ----------
+      // Create comunicado (save to table; if attachment file exists, upload and save path)
+      const handleCreateComunicadoSubmit = async (e) => {
+        e.preventDefault();
+        if (!supabase) return showToast('Configure Supabase', 'error');
+        let attachment_path = null;
+        if (newComunicadoForm.file) {
+          try {
+            const file = newComunicadoForm.file;
+            const safeName = `comunicados/${Date.now()}_${file.name}`;
+            attachment_path = await uploadToStorage('arteza', safeName, file);
+          } catch (err) {
+            console.error(err);
+            return showToast('Error al subir attachment', 'error');
+          }
+        }
+
+        const payload = {
+          title: newComunicadoForm.title,
+          category: newComunicadoForm.category,
+          priority: newComunicadoForm.priority,
+          content: newComunicadoForm.content,
+          author: `Adm. ${currentUser?.name || 'Administrador'}`,
+          pinned: false,
+          has_attachment: !!attachment_path,
+          attachment_name: newComunicadoForm.file ? newComunicadoForm.file.name : null,
+          attachment_path: attachment_path,
+          status: 'Publicado'
+        };
+
+        const { data, error } = await supabase.from('comunicados').insert([payload]).select();
+        if (error) {
+          console.error(error);
+          return showToast('Error al publicar comunicado', 'error');
+        }
+        setNewComunicadoForm({ title: '', category: 'General', priority: 'Normal', target: 'Todas las Unidades', content: '', attachmentName: '', attachmentPath: '' });
+        setIsCreateModalOpen(false);
+        fetchComunicados();
+        showToast('Comunicado publicado');
+      };
+
+      // Upload expense PDF (admin)
+      const handleSaveExpensePdf = async (e) => {
+        e.preventDefault();
+        if (!supabase) return showToast('Configure Supabase', 'error');
+        if (!pdfForm.file) return showToast('Seleccione un PDF', 'error');
+
+        try {
+          const file = pdfForm.file;
+          const path = `liquidaciones/${pdfForm.period.replace(/\s+/g,'_')}/${Date.now()}_${file.name}`;
+          const storagePath = await uploadToStorage('arteza', path, file);
+          // Insert metadata to table
+          const { data, error } = await supabase.from('expense_pdfs').insert([{
+            period: pdfForm.period,
+            file_name: file.name,
+            storage_path: storagePath,
+            uploaded_by: currentUser?.id || null
+          }]).select();
+          if (error) throw error;
+          setIsPdfUploadModalOpen(false);
+          setPdfForm({ period: 'Agosto 2026', fileName: '', fileFile: null, file: null });
+          fetchExpensePdfs();
+          showToast('PDF subido exitosamente');
+        } catch (err) {
+          console.error(err);
+          showToast('Error al subir PDF', 'error');
+        }
+      };
+
+      // Upload gallery image
+      const handleUploadGalleryImage = async (file, form) => {
+        if (!supabase) return showToast('Supabase no configurado', 'error');
+        try {
+          const path = `galeria/${Date.now()}_${file.name}`;
+          const storagePath = await uploadToStorage('arteza', path, file);
+          const urlObj = await createSignedUrl('arteza', storagePath, 60); // preview signed URL short-lived
+          // Insert row (store storage path in url field)
+          await supabase.from('galeria').insert([{
+            title: form.title,
+            category: form.category,
+            url: storagePath,
+            description: form.description,
+            date: form.date || new Date().toLocaleDateString('es-AR'),
+            uploaded_by: currentUser?.id || null
+          }]);
+          fetchGaleria();
+          showToast('Imagen subida');
+        } catch (err) {
+          console.error(err);
+          showToast('Error al subir imagen', 'error');
+        }
+      };
+
+      // Example: create libre deuda (admin)
+      const handleSaveLibreDeuda = async (data) => {
+        if (!supabase) return;
+        const { error } = await supabase.from('libre_deuda').insert([data]);
+        if (error) { console.error(error); showToast('Error al guardar certificado', 'error'); }
+        else { fetchLibreDeuda(); showToast('Certificado guardado'); }
+      };
+
+      // ---------- Profile picture update (upload avatar and update profiles table) ----------
+      const handleProfilePicChange = async (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+        try {
+          const path = `avatars/${currentUser.id}_${Date.now()}_${file.name}`;
+          const storagePath = await uploadToStorage('arteza', path, file);
+          // Update profile row with a storage path (avatar)
+          const { error } = await supabase.from('profiles').update({ avatar: storagePath }).eq('id', currentUser.id);
+          if (error) throw error;
+          // update local state
+          setCurrentUser(prev => ({ ...prev, avatar: storagePath }));
+          fetchProfiles();
+          showToast('Foto de perfil actualizada');
+        } catch (err) {
+          console.error(err);
+          showToast('Error al subir avatar', 'error');
+        }
+      };
+
+      // Create signed url helper for UI to render avatars/images
+      const getSignedUrlFor = async (storagePath) => {
+        if (!storagePath) return null;
+        try {
+          // If it's already a data URI or full URL, return as-is
+          if (storagePath.startsWith('data:') || storagePath.startsWith('http')) return storagePath;
+          return await createSignedUrl('arteza', storagePath, 60);
+        } catch (e) {
+          console.error(e);
+          return null;
+        }
+      };
+
+      // ---------- Simple register (creates Auth user + profile) ----------
+      const handleRegister = async (regForm) => {
+        if (!supabase) return showToast('Supabase no configurado', 'error');
+        // regForm: { email, password, fullName, phone, unit, userType }
+        try {
+          const { data, error } = await supabase.auth.signUp({
+            email: regForm.email,
+            password: regForm.password,
+            options: { data: { full_name: regForm.fullName } }
+          });
+          if (error) {
+            console.error(error);
+            return showToast('Error en registro', 'error');
+          }
+          // user created; the profile row can be inserted by the user (RLS permits insert where id = auth.uid())
+          showToast('Registro creado. Revise su email para confirmar si est\u00e1 habilitado.');
+        } catch (err) {
+          console.error(err);
+          showToast('Error al registrarse', 'error');
+        }
+      };
+
+      // ---------- UI rendering ----------
+      // For brevity many UI parts are kept similar to your original app
+      if (!isLoggedIn) {
+        return (
+          <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden">
+            {toastMessage && (
+              <div className="absolute top-5 right-5 z-[80] flex items-center gap-3 px-4 py-3 rounded-xl shadow-2xl bg-slate-800 text-white border border-slate-700 animate-bounce">
+                <i className={`fas ${toastMessage.type === 'error' ? 'fa-circle-exclamation text-red-400' : 'fa-circle-check text-emerald-400'}`}></i>
+                <span className="text-sm font-medium">{toastMessage.text}</span>
+              </div>
+            )}
+            <div className="max-w-md w-full bg-slate-800/90 backdrop-blur-xl rounded-3xl border border-slate-700 p-8 shadow-2xl relative z-10">
+              <div className="text-center mb-8">
+                <div className="w-16 h-16 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-white font-bold text-3xl mx-auto mb-4">
+                  <i className="fa-solid fa-building-user"></i>
+                </div>
+                <h2 className="font-bold text-2xl text-white">Consorcio<span className="text-indigo-400">Admin</span></h2>
+                <p className="text-xs text-slate-400 mt-1">Portal de Gest
